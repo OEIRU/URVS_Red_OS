@@ -1,10 +1,11 @@
-#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <time.h>
+
+#define MAX_FILES 1024
 
 // Структура для хранения информации о файле
 typedef struct {
@@ -13,67 +14,66 @@ typedef struct {
     int is_dir;
 } FileInfo;
 
-// Функция для сравнения двух FileInfo по времени изменения
+// Функция для сравнения файлов по времени модификации
 int compare_files(const void *a, const void *b) {
     FileInfo *fileA = (FileInfo *)a;
     FileInfo *fileB = (FileInfo *)b;
 
-    if (fileA->is_dir != fileB->is_dir) {
-        return fileA->is_dir - fileB->is_dir;
-    }
+    // Сначала сортируем по типу (каталоги в конце)
+    if (fileA->is_dir && !fileB->is_dir) return 1;
+    if (!fileA->is_dir && fileB->is_dir) return -1;
 
-    return (int)(fileB->mtime - fileA->mtime);
+    // Затем сортируем по времени модификации
+    if (fileA->mtime > fileB->mtime) return -1;
+    if (fileA->mtime < fileB->mtime) return 1;
+
+    return 0;
 }
 
 int main() {
     DIR *dir;
-    struct dirent *ent;
+    struct dirent *entry;
     struct stat file_stat;
-    FileInfo *files = NULL;
-    int count = 0;
+    FileInfo files[MAX_FILES];
+    int file_count = 0;
 
-    // Открываем каталог
-    if ((dir = opendir(".")) == NULL) {
+    // Открываем текущий каталог
+    dir = opendir(".");
+    if (dir == NULL) {
         perror("opendir");
         return 1;
     }
 
-    // Читаем записи каталога и собираем информацию о файлах
-    while ((ent = readdir(dir)) != NULL) {
-        if (stat(ent->d_name, &file_stat) == -1) {
+    // Читаем содержимое каталога
+    while ((entry = readdir(dir)) != NULL && file_count < MAX_FILES) {
+        // Пропускаем текущий и родительский каталоги
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Получаем информацию о файле
+        if (stat(entry->d_name, &file_stat) == -1) {
             perror("stat");
             continue;
         }
 
-        files = realloc(files, (count + 1) * sizeof(FileInfo));
-        if (!files) {
-            perror("realloc");
-            return 1;
-        }
+        // Заполняем структуру FileInfo
+        strncpy(files[file_count].name, entry->d_name, sizeof(files[file_count].name) - 1);
+        files[file_count].name[sizeof(files[file_count].name) - 1] = '\0';
+        files[file_count].mtime = file_stat.st_mtime;
+        files[file_count].is_dir = S_ISDIR(file_stat.st_mode);
 
-        strncpy(files[count].name, ent->d_name, sizeof(files[count].name) - 1);
-        files[count].name[sizeof(files[count].name) - 1] = '\0';
-        files[count].mtime = file_stat.st_mtime;
-        files[count].is_dir = S_ISDIR(file_stat.st_mode);
-
-        count++;
+        file_count++;
     }
 
-    // Сортируем файлы по времени изменения и типу (файл/каталог)
-    qsort(files, count, sizeof(FileInfo), compare_files);
+    closedir(dir);
 
-    // Выводим отсортированные файлы
-    for (int i = 0; i < count; i++) {
+    // Сортируем файлы
+    qsort(files, file_count, sizeof(FileInfo), compare_files);
+
+    // Выводим отсортированный список
+    for (int i = 0; i < file_count; i++) {
         printf("%s\n", files[i].name);
-    }
-
-    // Освобождаем память
-    free(files);
-
-    // Закрываем каталог
-    if (closedir(dir) == -1) {
-        perror("closedir");
-        return 1;
     }
 
     return 0;
