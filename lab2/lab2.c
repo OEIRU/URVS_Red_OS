@@ -38,21 +38,21 @@ int main() {
     // Создание или открытие временного файла с правами на чтение и запись
     fd = open(file_name, O_RDWR | O_CREAT | O_TRUNC, 0666);
     if (fd == -1) {
-        perror("open");
+        perror("Error: don't open file\n");
         return 1;
     }
 
     // Ввод значений x и n
     printf("Введите x = ");
     if (scanf("%lf", &x) != 1) {
-        fprintf(stderr, "Ошибка ввода x\n");
+        perror("Error: Input x incorrect\n");
         close(fd);
         remove(file_name);
         return 1;
     }
     printf("Введите n = ");
     if (scanf("%d", &n) != 1 || n <= 0) {
-        fprintf(stderr, "Ошибка ввода n\n");
+        perror("Error: Input n incorrect\n");
         close(fd);
         remove(file_name);
         return 1;
@@ -66,22 +66,30 @@ int main() {
         st.data = 0.0;     // Инициализируем значение Pi
         int a = 1;         // Коэффициент для ряда Лейбница
 
-        // Вычисление Pi через ряд Лейбница
-        for (int i = 0; i < n; i++) {
-            st.data += 4.0 * a / (2.0 * i + 1.0);
-            a = a * (-1); // Изменяем знак для следующего члена ряда
-        }
+    // Вычисление Pi через ряд Лейбница
+    for (int i = 0; i < n; i++) {
+        st.data += 4.0 * a / (2.0 * i + 1.0);
+        a = a * (-1); // Изменяем знак для следующего члена ряда
 
+        // Проверка на NaN
+        if (isnan(st.data)) {
+            fprintf(stderr, "Error in child process %d: Computation of Pi resulted in NaN at iteration %d.\n", getpid(), i);
+            close(fd); // Закрываем файловый дескриптор
+            exit(EXIT_FAILURE); // Завершаем процесс с кодом ошибки
+        }
+    }
+
+        
         // Записываем данные в файл
         if (write(fd, &st, sizeof(st)) != sizeof(st)) {
-            perror("write");
+            perror("Error: don't write\n");
             exit(EXIT_FAILURE);
         }
         close(fd); // Закрываем файл
         printf("Child process %d finished.\n", getpid());
         exit(0);   // Завершаем работу процесса
     } else if (pid_pi < 0) {
-        perror("fork (pi)");
+        perror("Error: don't make fork (pi)\n");
         close(fd);
         remove(file_name);
         return 1;
@@ -92,57 +100,110 @@ int main() {
     if (pid_cos == 0) { // Второй потомок (вычисление cos(x))
         printf("Child process %d started. Parent PID: %d\n", getpid(), getppid());
         st.pid = getpid(); // Сохраняем PID текущего процесса
-        st.data = 1.0;     // Инициализируем значение cos(x)
-        int a = 1;         // Коэффициент для ряда
-
+    
+        // Применяем периодичность для уменьшения значения x до диапазона [0, 2?]
+        double reduced_x = fmod(x, 2 * M_PI); // Учитываем только основной период
+        if (reduced_x < 0) {
+            reduced_x += 2 * M_PI; // Если x отрицательно, приводим его к положительному значению
+        }
+    
+        st.data = 1.0; // Инициализируем значение cos(x)
+        int a = 1;     // Коэффициент для ряда
+    
         // Вычисление cos(x) через степенной ряд
         for (int i = 1; i < n; i++) {
             a = a * (-1); // Изменяем знак для следующего члена ряда
-            st.data += a * pow(x, 2 * i) / factorial(2 * i);
+
+            // Вычисляем текущий член ряда
+            double current_term = a * pow(reduced_x, 2 * i) / factorial(2 * i);
+
+            // Проверяем текущий член на NaN
+            if (isnan(current_term)) {
+                fprintf(stderr, "Error in child process %d: Computation of cos(x) resulted in NaN at iteration %d.\n", getpid(), i);
+                close(fd); // Закрываем файловый дескриптор
+                exit(EXIT_FAILURE); // Завершаем процесс с кодом ошибки
+            }
+
+            st.data += current_term; // Добавляем текущий член к результату
+        }
+
+        // Финальная проверка на NaN после завершения цикла
+        if (isnan(st.data)) {
+            fprintf(stderr, "Error in child process %d: Final result of cos(x) computation resulted in NaN.\n", getpid());
+            close(fd); // Закрываем файловый дескриптор
+            exit(EXIT_FAILURE); // Завершаем процесс с кодом ошибки
         }
 
         // Записываем данные в файл
         if (write(fd, &st, sizeof(st)) != sizeof(st)) {
-            perror("write");
+            perror("Error: don't write cos\n");
             exit(EXIT_FAILURE);
         }
         close(fd); // Закрываем файл
         printf("Child process %d finished.\n", getpid());
         exit(0);   // Завершаем работу процесса
     } else if (pid_cos < 0) {
-        perror("fork (cos)");
+        perror("Error: make fork (cos)\n");
+        close(fd);
+        remove(file_name);
+        return 1;
+    }
+    
+    // Ожидание завершения первого дочернего процесса (вычисление Pi)
+    int status_pi;
+    if (waitpid(pid_pi, &status_pi, 0) == -1) {
+        perror("Error: waitpid (pi)\n");
         close(fd);
         remove(file_name);
         return 1;
     }
 
-    // Родительский процесс: ожидание завершения дочерних процессов
-    int status;
-    waitpid(pid_pi, &status, 0); // Ожидаем завершения первого потомка
-    if (WIFEXITED(status)) {
-        printf("Process %d exited with status %d\n", pid_pi, WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
-        printf("Process %d was terminated by signal %d\n", pid_pi, WTERMSIG(status));
+    if (!WIFEXITED(status_pi) || WEXITSTATUS(status_pi) != 0) {
+        fprintf(stderr, "Error: Child process %d (Pi computation) exited with an error.\n", pid_pi);
+        close(fd);
+        remove(file_name);
+        return 1;
     }
 
-    waitpid(pid_cos, &status, 0); // Ожидаем завершения второго потомка
-    if (WIFEXITED(status)) {
-        printf("Process %d exited with status %d\n", pid_cos, WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
-        printf("Process %d was terminated by signal %d\n", pid_cos, WTERMSIG(status));
+    // Ожидание завершения второго дочернего процесса (вычисление cos(x))
+    int status_cos;
+    if (waitpid(pid_cos, &status_cos, 0) == -1) {
+        perror("Error: waitpid (cos)\n");
+        close(fd);
+        remove(file_name);
+        return 1;
     }
 
-    // Чтение данных из файла
+    if (!WIFEXITED(status_cos) || WEXITSTATUS(status_cos) != 0) {
+        fprintf(stderr,"Error: Child process %d (cos(x) computation) exited with an error.\n", pid_cos);
+        close(fd);
+        remove(file_name);
+        return 1;
+    }
+
+    // Если оба процесса завершились успешно, читаем результаты из файла
     lseek(fd, 0, SEEK_SET); // Переходим в начало файла
     for (int i = 0; i < 2; i++) {
         if (read(fd, &st, sizeof(st)) != sizeof(st)) {
-            perror("read");
+            perror("Error: don't read pid\n");
             break;
         }
         if (st.pid == pid_pi) {
             pi_val = st.data; // Получаем значение Pi
+            if (isnan(pi_val)) {
+                perror("Error: Computed Pi value is NaN.\n");
+                close(fd);
+                remove(file_name);
+                return 1;
+            }
         } else if (st.pid == pid_cos) {
             cos_val = st.data; // Получаем значение cos(x)
+            if (isnan(cos_val)) {
+                perror("Error: Computed cos(x) value is NaN.\n");
+                close(fd);
+                remove(file_name);
+                return 1;
+            }
         }
     }
 
@@ -155,7 +216,7 @@ int main() {
     printf("f(%.10lf) = %.10lf\n", x, f);
 
     // Очистка ресурсов
-    close(fd);       // Закрываем файл
-    remove(file_name); // Удаляем временный файл
+    close(fd);
+    remove(file_name);
     return 0;
 }
