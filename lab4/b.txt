@@ -1,1 +1,2 @@
-vkostovsky tty7         2025-02-16 21:28 (:0)
+vkostovsky seat0        2025-04-11 18:30 (login screen)
+vkostovsky tty2         2025-04-11 18:30 (tty2)
