@@ -124,7 +124,7 @@ int main() {
     }
 
     pid_t sort_pid = fork();
-    if (sort_pid == 0) {
+        if (sort_pid == 0) {
         printf("Создан процесс для sort (PID: %d)\n", getpid());
 
         // Закрываем конец канала для записи
